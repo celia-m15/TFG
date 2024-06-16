@@ -1,0 +1,472 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Mar 29 19:12:07 2024
+
+@author: Cèlia Martínez
+"""
+
+"""
+
+File with the functions that processes the data from the .csv files to a DataFrame. Also, it has functions to process
+the data and split it into train, test and validation sets.
+These functions are divided into the ones used to process the data originally gathered from the users and the ones
+used to process the data created to pre-train the Neural Network
+
+"""
+
+
+########### LIBRARIES NEEDED ###########
+
+import os
+import glob
+import csv
+import random
+import hashlib
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+
+
+
+##################################################################################################
+
+## READ DATA FUNCTIONS
+
+##################################################################################################
+
+########### ORIGINAL DATA ###########
+
+def read_Traces_data(file_name: str) -> list:
+    """
+    This function reads the data of a Traces file
+
+    """
+    with open(file_name, 'r', encoding='utf-8') as file:
+        csv_reader = csv.reader(file, delimiter=';')
+        lines = list(csv_reader)
+    return lines
+
+    
+def read_Timestamps_data(file_name: str) -> list:
+    """
+    This function reads the data of a Timestamps file
+
+    """
+    with open(file_name, 'r', encoding='utf-8', errors='ignore') as file:
+        lines = file.readlines()
+    return lines
+    
+
+########### PRE-TRAINING DATA ###########
+
+def read_pretraining_data(file_name):
+    """
+    This function reads the data the pre-training data file
+
+    """
+    with open(file_name, 'r') as file:
+        csv_reader = csv.reader(file, delimiter=';')
+        lines = list(csv_reader)
+        return lines
+
+
+##################################################################################################
+
+## DATA EXTRACTION FUNCTIONS
+
+##################################################################################################
+
+########### ORIGINAL DATA ###########
+
+def change_date_format(date: str, date_format: str) -> datetime:
+    """
+    This function changes the date format and then changes the type from string to datetime
+
+    """
+
+    # Fixes the problem with miliseconds
+    if len(date) <= 23:
+        if(len(date.split(':')[3]) == 2):
+            date = date[:-2]+'0'+ date.split(':')[3]
+        elif(len(date.split(':')[3]) == 1):
+            date = date[:-1]+'00'+ date.split(':')[3]
+    
+    date_object = datetime.strptime(date, date_format)
+    return date_object
+
+
+def get_timestamps_data(Timestamps_line: str) -> (str, datetime):
+    """
+    This function extracts the information of every Timestamps register
+    
+    """    
+    # Splits the Timestamps data into two parts
+    Timestamps_data_splitted = Timestamps_line.strip().split('] ')
+    Timestamps_window_name = Timestamps_data_splitted[1]
+    
+    # Converts the date format
+    Timestamps_date = change_date_format(Timestamps_data_splitted[0][1:], '%Y-%m-%d %H:%M:%S:%f')
+    return Timestamps_date, Timestamps_window_name
+
+
+def get_traces_data_per_window_change(Traces_lines: list, Traces_index_start_value: int, Timestamps_date: datetime, Traces_list: list, User_id: str, possible_screen_change: bool = True) -> (list, int):
+    """
+    This function extracts the information of every Traces register of the same window, till the next window change
+    
+    """ 
+    for Traces_index, Traces_line in enumerate(Traces_lines[Traces_index_start_value:], start=Traces_index_start_value):
+
+        Traces_date = change_date_format(Traces_line[0][:31], "%b %d, %Y %H:%M:%S.%f000")
+
+        if Traces_date >= Timestamps_date and (Traces_line[9] == '0x0002' or Traces_line[7] == '53') and possible_screen_change:
+            Traces_list.append((str(Traces_date), Traces_line[1], Traces_line[2], Traces_line[3], Traces_line[4], Traces_line[5], Traces_line[6], Traces_line[7], Traces_line[8], Traces_line[9], User_id, '1'))
+
+            Traces_index_start_value = Traces_index +1
+            break
+        
+        # Writes the information in a list to afterwards create a DataFrame
+        Traces_list.append((str(Traces_date), Traces_line[1], Traces_line[2], Traces_line[3], Traces_line[4], Traces_line[5], Traces_line[6], Traces_line[7], Traces_line[8], Traces_line[9], User_id, '0'))
+    return Traces_list, Traces_index_start_value
+
+    
+def generate_user_id(file_name: str) -> str:
+    """
+    This function generates user id's with the file name.
+
+    """
+    # Generate a hash code from the file name.
+    hash_nom_arxiu = hashlib.md5(file_name.encode()).hexdigest()
+    # Sums a random number from 1 to 10000.
+    num_aleatori = random.randint(1, 10000)
+    # Combines the hash string with the sum of numbers to obtain the ID.
+    id_usuari = hash_nom_arxiu + str(num_aleatori)
+    return id_usuari
+
+
+########### PRE-TRAINING DATA ###########
+
+def change_date_format_in_pretraining(date: str, date_format: str) -> datetime:
+    """
+    This function changes the date format and then changes the type from string to datetime
+
+    """
+
+    # Fixes the problem with miliseconds
+    if len(date) <= 23:
+        date = date + '.000000'
+    
+    # Converts the date format
+    date_object = datetime.strptime(date, date_format)
+    return date_object
+
+
+def get_timestamps_data_in_pretraining(file_path: str, User_id: str) -> pd.DataFrame:
+    """
+    This function extracts the information of every Timestamps register
+    
+    """
+    Timestamps_list = []
+    timestamps = read_pretraining_data(file_path)
+    Timestamps_header = ("swap.time", "window.name", "user.id")
+    index = timestamps[0][0].find(" CET")
+    date = change_date_format(timestamps[0][0][:index-3], "%b %d, %Y %H:%M:%S.%f")
+    window_name = timestamps[0][0][index+5:]
+    Timestamps_list.append((date, window_name, User_id))
+    Timestamps = pd.DataFrame(Timestamps_list, columns = Timestamps_header)
+    return Timestamps
+
+
+def get_traces_data_in_pretraining(file_path: str, User_id: str, count_of_Traces: int) -> pd.DataFrame:
+    """
+    This function extracts the information of every Traces register
+    
+    """
+    Traces_list = []
+    Traces_lines = read_pretraining_data(file_path)
+    traces_header_values = Traces_lines[0][0].split(',')
+    Traces_header = (traces_header_values[1], traces_header_values[2], traces_header_values[3], traces_header_values[4], traces_header_values[5], traces_header_values[6], traces_header_values[7], traces_header_values[8], traces_header_values[9][:-4],  traces_header_values[10], "user.id", "Target")
+    
+    for i, line in enumerate(Traces_lines):
+        line_values = line[0].split(',')
+    
+        if len(line_values) < 12 or line_values[11].replace("\"", "") == '' and i != 1:
+            continue
+            
+        elif i==1:
+            date = line_values[1]+line_values[2]
+            Traces_date = change_date_format_in_pretraining(date[1:-8], "%b %d %Y %H:%M:%S.%f")
+            Traces_list.append((str(Traces_date), line_values[3].replace("\"", ""), line_values[4].replace("\"", ""), line_values[5].replace("\"", ""), line_values[6].replace("\"", ""), line_values[7].replace("\"", ""), line_values[8].replace("\"", ""), line_values[9].replace("\"", ""), line_values[10].replace("\"", ""), line_values[11].replace("\"", ""), User_id, '1'))
+            count_of_Traces += 1
+        
+        else:
+            date = line_values[1]+line_values[2]
+            Traces_date = change_date_format_in_pretraining(date[1:-8], "%b %d %Y %H:%M:%S.%f")
+            Traces_list.append((str(Traces_date), line_values[3].replace("\"", ""), line_values[4].replace("\"", ""), line_values[5].replace("\"", ""), line_values[6].replace("\"", ""), line_values[7].replace("\"", ""), line_values[8].replace("\"", ""), line_values[9].replace("\"", ""), line_values[10].replace("\"", ""), line_values[11].replace("\"", ""), User_id, '0'))
+            count_of_Traces += 1
+    
+    Traces = pd.DataFrame(Traces_list, columns = Traces_header)
+    return Traces, count_of_Traces
+
+
+##################################################################################################
+
+## CHECK RESULTS FUNCTION
+
+##################################################################################################
+
+########### ORIGINAL & PRE-TRAINING DATA ###########
+
+def check_results(count_of_Traces: list, Traces: pd.DataFrame, Timestamps: pd.DataFrame):
+    """
+    This function checks the results obtained after processing the data
+    
+    """
+    # Checks whether all the Traces registers have been processed
+    if count_of_Traces != Traces.shape[0]:
+        raise Exception("Exception: Not all the Traces registers have been processed.\n%d out of %d registers have been processed.\n" %(Traces.shape[0], count_of_Traces) )
+    
+    # Checks whether the amount of Target values assigned as 1 are the same as the amount of Timestamps registers
+    if(sum(Traces['Target'].astype('int')) != Timestamps.shape[0]):
+        raise Exception("Exception: The number of Target 1 values does not match with the amount of Timestamps registers.\n")
+
+
+##################################################################################################
+
+## PROCESSING FILES FUNCTIONS
+
+##################################################################################################
+
+########### ORIGINAL DATA ###########
+
+def process_files(Traces_file_name: str, Timestamps_file_name: str):
+    """
+    This function processes the timestamps and traces files data.
+
+    """
+       
+    # Creates the empty list to fill it with the data     
+    Traces_list = []
+    Timestamps_list = []
+
+    # Reads the Traces and Timestamps file data
+    Traces_lines = read_Traces_data(Traces_file_name)
+    Timestamps_lines = read_Timestamps_data(Timestamps_file_name) 
+    
+    # Generates the user ID
+    User_id = generate_user_id(Traces_file_name)
+    
+    # Remove the line with personal data
+    Traces_lines.pop(0)
+    # Remove the last line, because most of time is uncomplete
+    Traces_lines.pop(-1)
+    
+    # Starts variables
+    Traces_index_start_value = 0
+    
+    # Gets the DataFrame headers 
+    Timestamps_header = ("swap.time", "window.name", "user.id")
+    Traces_header = (Traces_lines[0][0], Traces_lines[0][1], Traces_lines[0][2], Traces_lines[0][3], Traces_lines[0][4], Traces_lines[0][5], Traces_lines[0][6], Traces_lines[0][7], Traces_lines[0][8], Traces_lines[0][9], "user.id", "Target")
+    Traces_lines.pop(0)
+    
+    last_Traces_date = change_date_format(Traces_lines[-1][0][:31], "%b %d, %Y %H:%M:%S.%f000")
+    
+    for Timestamps_index, Timestamps_line in enumerate(Timestamps_lines):
+        Timestamps_date, Timestamps_window_name = get_timestamps_data(Timestamps_line)
+
+        if Timestamps_date > last_Traces_date:
+            break
+
+        if Timestamps_index == len(Timestamps_lines)-1:
+
+            Traces_list, Traces_index_start_value = get_traces_data_per_window_change(Traces_lines, Traces_index_start_value, Timestamps_date, Traces_list, User_id, possible_screen_change = False)
+            continue
+        
+        if Timestamps_list and Timestamps_date - Timestamps_list[-1][0] <= timedelta(milliseconds=500) or len(Timestamps_window_name)<=22 :
+            continue
+        
+        Traces_list, Traces_index_start_value = get_traces_data_per_window_change(Traces_lines, Traces_index_start_value, Timestamps_date, Traces_list, User_id)
+ 
+        # Writes the information in a list to afterwards create a DataFrame
+        Timestamps_list.append((Timestamps_date, Timestamps_window_name, User_id))
+
+    Timestamps = pd.DataFrame(Timestamps_list, columns = Timestamps_header)
+    Traces = pd.DataFrame(Traces_list, columns = Traces_header)
+    
+    # Checks the results obtained
+    check_results(len(Traces_lines), Traces, Timestamps)
+    
+    return Traces, Timestamps
+
+
+def data_processing(Traces_path: str, Timestamps_path: str):
+    """
+    This function processes the data files 
+    
+    """
+    # Lists all the CSV files of each folder
+    Traces_files = sorted(glob.glob(Traces_path))
+    Timestamps_files = sorted(glob.glob(Timestamps_path))
+    
+    # Creates the empty list to fill it with the data processed
+    Traces_df_list = []
+    Timestamps_df_list = []
+
+    # Iterates through each file in the folder
+    for i, (Traces_file, Timestamps_file) in enumerate(zip(Traces_files, Timestamps_files)):
+        print('Processing file '+str(i+1)+' out of '+str(len(Traces_files)))
+        print('File Name: %s\n' % (Traces_file.strip().split("\\")[1]))
+        
+        # Processes the data of the file
+        Traces, Timestamps = process_files(Traces_file, Timestamps_file)
+        
+        # Append the dataframes obtained 
+        Traces_df_list.append(Traces)
+        Timestamps_df_list.append(Timestamps)
+
+    # Concatenate all the dataframes processed if there is more than one
+    if i > 0:
+        Traces = pd.concat(Traces_df_list, ignore_index=True)
+        Timestamps = pd.concat(Timestamps_df_list, ignore_index=True)
+        
+    else: 
+        Traces = Traces_df_list[0]
+        Timestamps = Timestamps_df_list[0]
+    
+    return Traces, Timestamps
+
+
+########### PRE-TRAINING DATA ###########
+
+def data_preprocessing_in_pretraining(Main_path: str) -> (pd.DataFrame, pd.DataFrame):
+    """
+    This function processes the data files 
+    
+    """
+
+    # Defines all the variables needed   
+    Traces_df_list = []
+    Timestamps_df_list = []
+    count_of_Traces = 0
+    User_id = 0
+    
+    # Checks if the path exists
+    if not os.path.isdir(Main_path):
+        return
+
+    for dir_name in os.listdir(Main_path):
+        print('Directory:', dir_name)
+        
+        # Creates the User_id
+        if dir_name[4] == "-":
+            User_id = "0"
+        else: 
+            User_id = dir_name[4]
+        dir_path = os.path.join(Main_path, dir_name)
+
+        # Checks if the dir exists
+        if os.path.isdir(dir_path):
+            
+            # For every folder extracts the information of both files
+            for file_name in os.listdir(dir_path):
+                
+                file_path = os.path.join(dir_path, file_name)
+                
+                if file_name == 'task.csv':
+                    Timestamps = get_timestamps_data_in_pretraining(file_path, User_id)
+
+                if file_name == 'data.csv':
+                    Traces, count_of_Traces = get_traces_data_in_pretraining(file_path, User_id, count_of_Traces)
+                    
+            # Writes every DataFrame in a list
+            Traces_df_list.append(Traces)
+            Timestamps_df_list.append(Timestamps)
+            
+    # Concatenate all the dataframes of the list
+    Traces = pd.concat(Traces_df_list, ignore_index=True)
+    Timestamps = pd.concat(Timestamps_df_list, ignore_index=True)
+    
+    # Checks the results obtained
+    check_results(count_of_Traces, Traces, Timestamps)
+    
+    return Traces, Timestamps
+            
+
+##################################################################################################
+
+## PROCESSING DATA FUNCTION
+
+##################################################################################################
+
+########### ORIGINAL & PRE-TRAINING DATA ###########
+        
+def data_preprocessing(Traces: pd.DataFrame, Timestamps: pd.DataFrame) -> (pd.DataFrame, pd.DataFrame):
+    """
+    This function processes the data, giving the proper type and format
+    
+    """
+    # Assigns the proper data type of Traces data
+    Traces['frame.time'] = Traces['frame.time'].astype('datetime64[ns]')
+    Traces['frame.len'] = Traces['frame.len'].astype('int')
+    Traces['Target'] = Traces['Target'].astype('int')
+    
+    # Encodes categorical variables
+    for column in ['ip.src', 'ip.dst', 'ip.proto', 'tcp.srcport', 'tcp.dstport', 'udp.srcport', 'udp.dstport', 'user.id', 'tcp.flags']:
+        le = LabelEncoder()
+        Traces[column] = le.fit_transform(Traces[column])
+    
+    # Assigns the proper data type of Timestamps data
+    Timestamps['swap.time'] = Timestamps['swap.time'].astype('datetime64[ns]')
+    
+    # Standerize numerical variables
+    scaler = StandardScaler()
+    Traces['frame.len'] = pd.Series(scaler.fit_transform(Traces['frame.len'].to_frame()).flatten(), index = Traces['frame.len'].index)
+    Traces['frame.time'] = pd.Series(scaler.fit_transform(Traces['frame.time'].to_frame()).flatten(), index = Traces['frame.time'].index)
+    
+    return Traces, Timestamps
+
+
+##################################################################################################
+
+## SPLIT DATA FUNCTION
+
+##################################################################################################
+
+########### ORIGINAL & PRE-TRAINING DATA ###########
+        
+def train_test_val_split(Traces: pd.DataFrame) -> (list, np.ndarray, list, np.ndarray, list, np.ndarray):
+    """
+    This function splits the data into Train, Test and Validation sets
+    
+    """
+    X_cat1 = Traces['ip.src'].values
+    X_cat2 = Traces['ip.dst'].values
+    X_cat3 = Traces['ip.proto'].values
+    X_cat4 = Traces['tcp.srcport'].values
+    X_cat5 = Traces['tcp.dstport'].values
+    X_cat6 = Traces['udp.srcport'].values
+    X_cat7 = Traces['udp.dstport'].values
+    X_cat8 = Traces['user.id'].values
+    X_cat9 = Traces['tcp.flags'].values
+    X_num1 = Traces['frame.len'].values
+    X_time = Traces['frame.time'].values
+    y = Traces['Target'].values
+
+    # split between test and train
+    X_cat1_train, X_cat1_test, X_cat2_train, X_cat2_test, X_cat3_train, X_cat3_test, X_cat4_train, X_cat4_test, X_cat5_train, X_cat5_test, X_cat6_train, X_cat6_test, X_cat7_train, X_cat7_test, X_cat8_train, X_cat8_test, X_cat9_train, X_cat9_test, X_num1_train, X_num1_test, X_time_train, X_time_test, y_train, y_test = train_test_split(X_cat1, X_cat2, X_cat3, X_cat4, X_cat5, X_cat6, X_cat7, X_cat8, X_cat9, X_num1, X_time, y, test_size=0.15, random_state=42, shuffle = False)
+    # split between validation and train
+    X_cat1_train, X_cat1_valid, X_cat2_train, X_cat2_valid, X_cat3_train, X_cat3_valid, X_cat4_train, X_cat4_valid, X_cat5_train, X_cat5_valid, X_cat6_train, X_cat6_valid, X_cat7_train, X_cat7_valid, X_cat8_train, X_cat8_valid, X_cat9_train, X_cat9_valid, X_num1_train, X_num1_valid, X_time_train, X_time_valid, y_train, y_valid = train_test_split(X_cat1_train, X_cat2_train, X_cat3_train, X_cat4_train, X_cat5_train, X_cat6_train, X_cat7_train, X_cat8_train, X_cat9_train, X_num1_train, X_time_train, y_train, test_size=0.15, random_state=42, shuffle = False)
+    
+    X_train = [X_cat1_train, X_cat2_train, X_cat3_train, X_cat4_train, X_cat5_train, X_cat6_train, X_cat7_train, X_cat8_train, X_cat9_train, X_num1_train, X_time_train]
+    y_train = np.array(y_train)
+    
+    X_test = [X_cat1_test, X_cat2_test, X_cat3_test, X_cat4_test, X_cat5_test, X_cat6_test, X_cat7_test, X_cat8_test, X_cat9_test, X_num1_test, X_time_test]
+    y_test = np.array(y_test)
+    
+    X_valid = [X_cat1_valid, X_cat2_valid, X_cat3_valid, X_cat4_valid, X_cat5_valid, X_cat6_valid, X_cat7_valid, X_cat8_valid, X_cat9_valid, X_num1_valid, X_time_valid]
+    y_valid = np.array(y_valid)
+    
+    return X_train, y_train, X_test, y_test, X_valid, y_valid
+
+
