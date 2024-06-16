@@ -1,0 +1,76 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Mar 14 09:13:11 2024
+
+@author: Cèlia Martínez
+
+"""
+
+"""
+Aquest document executa la xarxa amb les dades creades per pre-entrenar la xarxa.
+
+"""
+
+########### LIBRARIES NEEDED ###########
+
+import time
+import keras
+from Funcions_Xarxa import lstm_model
+from Funcions_Processat_de_dades import data_preprocessing, train_test_val_split, data_preprocessing_in_pretraining
+
+
+# ------------------------------------------------
+# Data Loading
+# ------------------------------------------------
+
+print('Loading data...')
+
+pretraining_data_path = "./../Data_total"
+
+Traces, Timestamps = data_preprocessing_in_pretraining(pretraining_data_path)
+
+
+# ------------------------------------------------
+# Data Processing
+# ------------------------------------------------
+
+print('Processing data...')
+
+### Processing Traces data ###
+Traces, Timestamps = data_preprocessing(Traces, Timestamps)
+
+# Train, test and validation split
+X_train, y_train, X_test, y_test, X_valid, y_valid = train_test_val_split(Traces)
+
+# Keeps the weights of the model after the training in a file
+checkpoint_filepath = './checkpoint.weights.h5'
+model_checkpoint_callback = keras.callbacks.ModelCheckpoint(
+    filepath=checkpoint_filepath,
+    save_weights_only=True)
+
+# Compile the model and set its variables
+model = lstm_model(Traces)
+epochs = 5
+batch_size = 16
+
+
+# ------------------------------------------------
+# Model Training 
+# ------------------------------------------------
+
+print('Training the model...')
+
+# Train the model
+start_time = time.time()
+history = model.fit(X_train, y_train, batch_size = batch_size, epochs=epochs, validation_data = (X_valid, y_valid))
+print('Total time:',time.time() - start_time)
+
+
+# ------------------------------------------------
+# Evaluating the model
+# ------------------------------------------------
+
+print('Evaluating the model with the test set...')
+pretrain_loss = model.evaluate(X_test, y_test)
+print(f"Loss model: {pretrain_loss}")
+
