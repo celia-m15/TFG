@@ -1,0 +1,97 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Mar 14 09:13:11 2024
+
+@author: Cèlia Martínez
+
+"""
+
+"""
+Xarxa que funciona amb les dades reals
+
+"""
+
+########### LIBRARIES NEEDED ###########
+
+import csv
+import time
+import numpy as np
+from Funcions_Processat_de_dades import data_preprocessing, train_test_val_split,data_processing
+from Funcions_Xarxa import lstm_model, line_plot, calculate_general_metric, confusion_matrix_
+
+
+# ------------------------------------------------
+# Data Loading
+# ------------------------------------------------
+
+print('Loading data...')
+
+# Data paths
+Traces_path = './Original_Data/Traces/*.csv'
+Timestamps_path = './Original_Data/Timestamps/*.csv'
+
+# Process the files
+Traces, Timestamps = data_processing(Traces_path, Timestamps_path)
+
+
+# ------------------------------------------------
+# Data Processing
+# ------------------------------------------------
+
+print('Processing data...')
+# Process the data
+Traces, Timestamps = data_preprocessing(Traces, Timestamps)
+
+# Splits the data into Train, Test and Validation sets
+X_train, y_train, X_test, y_test, X_valid, y_valid = train_test_val_split(Traces)
+
+# Compile the model and set its variables
+model = lstm_model(Traces)
+epochs = 5
+batch_size = 16
+
+# Load the weights (Uncomment when needed)
+#checkpoint_filepath = './checkpoint.weights.h5'
+#model.load_weights(checkpoint_filepath,  skip_mismatch=True)
+
+# ------------------------------------------------
+# Model Training & plot results
+# ------------------------------------------------
+
+print('Training the model...')
+# Train the model 
+start_time = time.time()
+history = model.fit(X_train, y_train, batch_size = batch_size, epochs=epochs, validation_data = (X_valid, y_valid))
+print('Total time:',time.time() - start_time)
+
+# Plot the results of loss and metric with both train and validation data
+
+## Loss plot
+line_plot('loss', 'val_loss', 'Train', 'Validation', 'Epoch number', 'loss', 'Comparing training and validation loss for the RNN model', history, epochs)
+
+## Metric plot
+line_plot('metric', 'val_metric', 'Train', 'Validation', 'Epoch number', 'Metric value', 'Comparing training and validation metric value for the RNN model', history, epochs)
+
+# ------------------------------------------------
+# Evaluating the model
+# ------------------------------------------------
+
+print('Evaluating the model with the test set...')
+# Use the model with the test set
+y_pred = model.predict(X_test)
+threshold = 0.5
+y_pred = np.where(y_pred > threshold, 1,0)
+
+# Calculate the metric
+metrica, true_positives, true_negatives, false_positives, false_negatives = calculate_general_metric(y_test, y_pred, Traces)
+print('Metric score:', metrica)
+
+# Plot the confusion matrix
+confusion_matrix_(true_positives, true_negatives, false_positives, false_negatives)
+
+# Keep the predicted values in a file
+with open('predicted.csv', 'w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerows(y_pred)
+
+
