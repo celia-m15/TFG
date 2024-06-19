@@ -1,0 +1,250 @@
+"""
+Created on Thu Jun 13 08:20:14 2024
+
+@author: Cèlia Martínez
+"""
+
+"""
+
+This file contains all the functions related to the neural 
+network, including the NN itself, the metric used and the 
+graphic functions.
+
+"""
+
+########### LIBRARIES NEEDED ###########
+
+import math
+import keras
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import tensorflow as tf
+from datetime import timedelta
+import matplotlib.pyplot as plt
+from tensorflow.keras.models import Model
+from matplotlib.colors import LinearSegmentedColormap
+from tensorflow.keras.layers import LSTM, Dense, Embedding, Input, Concatenate, Reshape
+
+
+##################################################################################################
+
+## NEURAL NETWORK FUNCTION
+
+##################################################################################################
+
+def lstm_model(Traces: pd.DataFrame) -> Model:
+    """
+    This function defines the Neural Network and some of the 
+    parameters used
+
+    """
+    # Define input layers for categorical and numerical features
+    input_values = ['input_cat1', 'input_cat2', 'input_cat3', 'input_cat4', 'input_cat5', 'input_cat6', 'input_cat7', 'input_cat8', 'input_cat9', 'input_num1', 'input_time']
+    inputs = [Input(shape=(1,), name=input_value) for input_value in input_values]
+
+    # Embedding layer for categorical variables
+    embedding_shapes = [Traces['ip.src'].nunique(), Traces['ip.dst'].nunique(), Traces['ip.proto'].nunique(), Traces['tcp.srcport'].nunique(), Traces['tcp.dstport'].nunique(), Traces['udp.srcport'].nunique(), Traces['udp.dstport'].nunique(), Traces['user.id'].nunique(), Traces['tcp.flags'].nunique()]
+    embedding_names = ['cat1_embedding', 'cat2_embedding', 'cat3_embedding', 'cat4_embedding', 'cat5_embedding', 'cat6_embedding', 'cat7_embedding', 'cat8_embedding', 'cat9_embedding']
+    embedding_dim = int(Traces.shape[0]*0.01)
+    Embeddings = [Embedding(embedding_shape, embedding_dim, input_length=1, name=embedding_name)(input_value) for embedding_shape, embedding_name, input_value in zip(embedding_shapes, embedding_names, inputs)]
+
+    # Reshape the numerical inputs to match the shape of the reshaped categorical inputs
+    reshaped_num1 = Reshape(target_shape=(1, 1))(inputs[9])
+    reshaped_time = Reshape(target_shape=(1, 1))(inputs[10])
+
+    # Concatenate the reshaped embedded categorical inputs and numerical inputs
+    embeded_concatenated_inputs = Concatenate(axis=-1)(Embeddings + [reshaped_num1, reshaped_time])
+
+    # Define the optimizer 
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+    
+    # LSTM layer
+    lstm_output_3 = LSTM(16)(embeded_concatenated_inputs)
+    
+    # Dense layer
+    output = Dense(1, activation = 'sigmoid')(lstm_output_3)
+    
+    # Define the model
+    model = Model(inputs=[inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[6], inputs[7], inputs[8], inputs[9], inputs[10]], outputs=output)
+    metric_name = RNN_metric(Traces)
+    
+    # Compile the model
+    model.compile(optimizer=optimizer, loss='binary_crossentropy', metrics=[metric_name])
+
+    return model
+
+
+##################################################################################################
+
+## METRIC FUNCTIONS
+
+##################################################################################################
+
+def RNN_metric(Traces: pd.DataFrame) -> int:
+    """
+    This function calculates the metric in the Neural Network using the Traces dataframe. That is the reason why it is been defined with more functions inside.
+
+    """
+    def metric(y_true: tf.tensor, y_pred: tf.tensor) -> int:
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(tf.round(y_pred), tf.float32)
+        metrica = 0
+        true_positives = 0
+        time_sequence = tf.constant(pd.to_datetime(Traces['frame.time']).apply(lambda x: x.timestamp()).values, dtype=tf.float64)
+        
+        start_index = 0
+        i = tf.constant(0, dtype=tf.int32)
+        
+        def outer_cond(i, start_index, true_positives):
+            return tf.less(i, tf.shape(y_true)[0])
+        
+        def outer_body(i, start_index, true_positives):
+            true_time = time_sequence[i]
+            min_difference = tf.constant(1e38, dtype=tf.float64)
+            j = start_index
+    
+            def inner_cond(j, start_index, min_difference, true_positives):
+                return tf.less(j, tf.shape(y_pred)[0])
+    
+            def inner_body(j, start_index, min_difference, true_positives):
+                pred_time = time_sequence[j]
+                time_difference = tf.abs(tf.subtract(pred_time, true_time))
+                
+                match_found = tf.logical_and(tf.equal(y_pred[j], 1),
+                                             tf.less_equal(time_difference, tf.constant(timedelta(seconds=0.5).total_seconds(), dtype=tf.float64)))
+                
+                def update_vars():
+                    tf.add(true_positives, 1)
+                    start_index = j
+                    return j, start_index, tf.constant(1e38, dtype=tf.float64), true_positives
+    
+                def update_min_diff():
+                    new_min_difference = tf.cond(tf.less(time_difference, min_difference),
+                                                 lambda: time_difference,
+                                                 lambda: min_difference)
+                    return j, start_index, new_min_difference, true_positives
+                
+                j, start_index, min_difference, true_positives = tf.cond(
+                    match_found,
+                    lambda: update_vars(),
+                    lambda: update_min_diff()
+                )
+                
+                return tf.add(j, 1), start_index, min_difference, true_positives
+            
+            j, start_index, min_difference, true_positives = tf.while_loop(
+                inner_cond, inner_body, [j, start_index, min_difference, true_positives])
+            
+            return tf.add(i, 1), start_index, true_positives
+        
+        _, _, true_positives = tf.while_loop(outer_cond, outer_body, [i, start_index, true_positives])
+        total_actual_positive = tf.cast(tf.reduce_sum(y_true), dtype=tf.int32)
+        metrica = true_positives/total_actual_positive
+        if tf.reduce_any(tf.math.is_nan(metrica)):
+            # Handle the case where there are NaN values
+            return tf.constant(float(0), dtype=metrica.dtype)
+        return metrica
+    return metric
+
+def general_metric(Traces: pd.DataFrame) -> int:
+    """
+    This function calculates the metric using the Traces dataframe. That is the reason why it is been defined using two functions.
+
+    """
+    def metric(y_true: list, y_pred: list) -> (int, int, int ,int, int):
+        
+        # Defines variables
+        true_positives = 0
+        true_negatives = 0
+        time_sequence = pd.to_datetime(Traces['frame.time']).apply(lambda x: x.timestamp()).values
+        
+        # Iterate over the sequences
+        start_index = 0
+        for i in range(len(y_true)):
+            if y_true[i] == 1:  # Check if the true value is positive
+                true_time = time_sequence[i]
+                min_difference = 10000000000000000000000000000000000000000000000
+                # For every predicted value check if there is one in less than 0.5 seconds around the real one
+                for j in range(start_index, len(y_pred)):
+                    if y_pred[j] == 1:  # Check if the predicted value is positive
+                        pred_time = time_sequence[j]
+                        time_difference = abs(pred_time - true_time)
+                        # Check if the predicted time is within the threshold
+                        if time_difference <= timedelta(seconds=0.5).total_seconds():
+                            true_positives += 1
+                            start_index = j
+                            break  # Exit inner loop since we found a match
+                        elif time_difference < min_difference:
+                            min_difference = time_difference
+                        elif time_difference > min_difference:
+                            break
+            elif y_true[i] == 0 and y_pred[i] == 0:
+                true_negatives +=1
+                
+        # Calculates the other values used in the confusion matrix
+        total_predicted_positive = sum(y_pred)
+        total_actual_positive = sum(y_true)
+        false_positives = int(total_predicted_positive - true_positives)
+        false_negatives = int(total_actual_positive - true_positives)
+        metrica = true_positives/total_actual_positive
+        if math.isnan(metrica):
+            return 0, true_positives, true_negatives, false_positives, false_negatives
+        return metrica, true_positives, true_negatives, false_positives, false_negatives
+    return metric
+    
+
+def calculate_general_metric(y_true: list, y_pred: list, Traces: pd.DataFrame) -> (int, int, int ,int, int):
+    """
+    This function calls the metric function using the Traces dataframe.
+
+    """
+    metrica = general_metric(Traces)
+    return metrica(y_true, y_pred)
+
+
+##################################################################################################
+
+## PLOT & CONFUSION MATRIX FUNCTIONS
+
+##################################################################################################
+
+def line_plot(data: str, val_data: str, data_label: str, val_data_label: str, x_label: str, y_label: str, title: str, history: keras.callbacks.History, epochs: int):
+    """
+    This function plots a graphic depending on the data passed as parameters
+
+    """
+    metric = history.history[data]
+    val_metric = history.history[val_data]
+    e = range(1, epochs + 1)
+    plt.plot(e, metric, 'b', label=data_label, color='blue')
+    plt.plot(e, val_metric, 'b', label=val_data_label, color='red')
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.legend()
+    plt.show()
+
+def confusion_matrix_(true_positives: int, true_negatives: int, false_positives: int, false_negatives: int):
+    """
+    This function plots a confusion matrix of the results obtained in the Neural Network
+
+    """
+    conf_matrix = np.array([[true_negatives, false_positives],
+                            [false_negatives, true_positives]])
+
+    colors = ["white", "orange", "red"]
+    n_bins = 100  
+    
+    # Creates the heat map
+    cmap = LinearSegmentedColormap.from_list("custom_cmap", colors, N=n_bins)
+    plt.figure(figsize=(8, 6))
+    sns.set(font_scale=1.5)
+    sns.heatmap(conf_matrix, annot=True, fmt='g', cmap=cmap, cbar=True,
+                xticklabels=['Predicted Negative', 'Predicted Positive'],
+                yticklabels=['Actual Negative', 'Actual Positive'])
+    plt.xlabel('Predicted Label', labelpad=15)
+    plt.ylabel('True Label', labelpad=15)
+    plt.title('Confusion Matrix', pad=20)
+    plt.show()
+
