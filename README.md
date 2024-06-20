@@ -1,3 +1,4 @@
 # És el nostre temps entre tasques una dada vulnerable en termes de privacitat?
 En una era en què la privacitat digital és primordial, aquest estudi examina els riscos potencials per a la privacitat que plantegen els proveïdors de serveis de xarxa. En concret, plantegem la hipòtesi que els proveïdors poden inferir els intervals entre les tasques de l’usuari analitzant els patrons d’activitat de la xarxa, la qual cosa vulnera la confidencialitat de l’usuari.
+
 Per provar aquesta hipòtesi, s’ha desenvolupat un programari per simular el trànsit de xarxa i s’ha entrenar una xarxa neuronal amb les dades recollides. Els resultats mostren que, tot i que el programari ha estat efectiu en la recopilació de dades rellevants, es necessita més capacitat computacional i un major volum de dades per obtenir conclusions significatives. Aquest estudi planteja una problemàtica de privacitat a la xarxa que requereix més investigació per assegurar la privacitat dels usuaris.
